@@ -1,0 +1,124 @@
+diff --git a/src/diff-snapshot.js b/src/diff-snapshot.js
+index 19fdd37d9ca3c260b1c8a7d2df4b9889a0caf325..e777804a65bc561e09265d161f827f9c8809ec48 100644
+--- a/src/diff-snapshot.js
++++ b/src/diff-snapshot.js
+@@ -226,8 +226,7 @@ function diffImageToSnapshot(options) {
+   let result = {};
+   const baselineSnapshotPath = path.join(snapshotsDir, `${snapshotIdentifier}.png`);
+   if (!fs.existsSync(baselineSnapshotPath)) {
+-    mkdirp.sync(path.dirname(baselineSnapshotPath));
+-    fs.writeFileSync(baselineSnapshotPath, receivedImageBuffer);
++    writePngSync(baselineSnapshotPath, receivedImageBuffer);
+     result = { added: true };
+   } else {
+     const receivedSnapshotPath = path.join(receivedDir, `${snapshotIdentifier}-received.png`);
+@@ -240,8 +239,8 @@ function diffImageToSnapshot(options) {
+ 
+     const diffConfig = Object.assign({}, defaultDiffConfig, customDiffConfig);
+ 
+-    const rawReceivedImage = PNG.sync.read(receivedImageBuffer);
+-    const rawBaselineImage = PNG.sync.read(fs.readFileSync(baselineSnapshotPath));
++    const rawReceivedImage = readPNG(receivedImageBuffer);
++    const rawBaselineImage = readPNG(fs.readFileSync(baselineSnapshotPath));
+     const hasSizeMismatch = (
+       rawReceivedImage.height !== rawBaselineImage.height ||
+       rawReceivedImage.width !== rawBaselineImage.width
+@@ -294,8 +293,7 @@ function diffImageToSnapshot(options) {
+ 
+     if (isFailure({ pass, updateSnapshot })) {
+       if (storeReceivedOnFailure) {
+-        mkdirp.sync(path.dirname(receivedSnapshotPath));
+-        fs.writeFileSync(receivedSnapshotPath, receivedImageBuffer);
++        writePngSync(receivedSnapshotPath, receivedImageBuffer, true);
+         result = { receivedSnapshotPath };
+       }
+ 
+@@ -318,10 +316,7 @@ function diffImageToSnapshot(options) {
+           composerParams.offsetX * index, composerParams.offsetY * index
+         );
+       });
+-      // Set filter type to Paeth to avoid expensive auto scanline filter detection
+-      // For more information see https://www.w3.org/TR/PNG-Filters.html
+-      const pngBuffer = PNG.sync.write(compositeResultImage, { filterType: 4 });
+-      fs.writeFileSync(diffOutputPath, pngBuffer);
++      const pngBuffer = writePngSync(diffOutputPath, compositeResultImage, true);
+ 
+       result = {
+         ...result,
+@@ -334,8 +329,7 @@ function diffImageToSnapshot(options) {
+         imgSrcString: `data:image/png;base64,${pngBuffer.toString('base64')}`,
+       };
+     } else if (shouldUpdate({ pass, updateSnapshot, updatePassedSnapshot })) {
+-      mkdirp.sync(path.dirname(baselineSnapshotPath));
+-      fs.writeFileSync(baselineSnapshotPath, receivedImageBuffer);
++      writePngSync(baselineSnapshotPath, receivedImageBuffer);
+       result = { updated: true };
+     } else {
+       result = {
+@@ -352,6 +346,7 @@ function diffImageToSnapshot(options) {
+ 
+ 
+ function runDiffImageToSnapshot(options) {
++  options.receivedImageBuffer = toPngBuffer(options.receivedImageBuffer, true);
+   options.receivedImageBuffer = options.receivedImageBuffer.toString('base64');
+ 
+   const serializedInput = JSON.stringify(options);
+@@ -377,6 +372,58 @@ function runDiffImageToSnapshot(options) {
+   return result;
+ }
+ 
++
++function isPngBytes(data) {
++  return Buffer.isBuffer(data) || data instanceof Uint8Array;
++}
++
++function isRgbaImageData(data) {
++  return typeof data === 'object' && data.width > 0 && data.height > 0 && data.rgba && data.rgba.length > 0;
++}
++
++function toPngBuffer(data, fastAndLarge) {
++  if (isRgbaImageData(data)) {
++    data = readPNG(data);
++  }
++  if (data instanceof PNG) {
++    return PNG.sync.write(
++      data,
++      fastAndLarge ?
++        { deflateLevel: 1, filterType: 0 } :
++        // Other filter types are slower to encode (and decode!)
++        // See: https://www.w3.org/TR/PNG-Filters.html
++        { deflateLevel: 9, filterType: 1 }
++    );
++  }
++  return data;
++}
++
++function readPNG(data) {
++  if (isRgbaImageData(data)) {
++    // Construct a PNG from raw RGBA image data
++    const png = new PNG({ width: data.width, height: data.height });
++    Buffer.from(data.rgba).copy(png.data);
++    return png;
++  }
++  if (isPngBytes(data)) {
++    return PNG.sync.read(data, { checkCRC: false, skipRescale: true });
++  }
++  if (data instanceof PNG) {
++    return data;
++  }
++  throw new Error('Unexpected PNG data type');
++}
++
++function writePngSync(outputPath, data, fastAndLarge) {
++  data = toPngBuffer(data, fastAndLarge || false);
++
++  mkdirp.sync(path.dirname(outputPath));
++  fs.writeFileSync(outputPath, data);
++
++  return data;
++}
++
++
+ module.exports = {
+   diffImageToSnapshot,
+   runDiffImageToSnapshot,
